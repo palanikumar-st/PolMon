@@ -1,0 +1,136 @@
+#include <WiFi.h>
+#include <PubSubClient.h>  // For MQTT
+#include <ArduinoJson.h>   // For formatting the data
+
+// --- CONFIGURATION ---
+// This MUST exactly match your hostapd.conf
+const char* ssid = "ragurragur";
+const char* password = "ragurragur"; 
+
+// This MUST be the Pi's static IP
+const char* mqtt_server_ip = "192.168.4.1"; 
+const int mqtt_port = 1883;
+const char* mqtt_topic = "esp32/sensors";
+// --- End of Configuration ---
+
+
+// Global objects
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// Timer for non-blocking delay
+long lastMsgTime = 0;
+const int msgInterval = 10000; // 10 seconds
+
+void setup_wifi() {
+  Serial.begin(115200);
+  delay(100);
+  
+  Serial.println("--- Simple MQTT Client ---");
+  Serial.print("Connecting to: ");
+  Serial.println(ssid);
+
+  WiFi.mode(WIFI_STA); // Set to Wi-Fi client mode
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nSUCCESS: WiFi Connected!");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+// This function handles reconnecting to the MQTT broker
+void reconnect_mqtt() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    
+    // Create a unique client ID
+    String clientId = "ESP32-SensorNode-";
+    clientId += String(random(0xffff), HEX);
+
+    // Attempt to connect
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected!");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+// *******************************************************************
+// *** THIS IS THE MODIFIED FUNCTION ***
+// *******************************************************************
+// This function generates and publishes the data
+void publishSensorData() {
+  // 1. Generate random sensor values (for testing)
+  // !!!
+  // !!! REPLACE THESE with your actual sensor readings!
+  // !!! (e.g., from your ADS1115)
+  // !!!
+  float nox_val = random(10, 50) / 10.0;     // e.g., 1.0 to 5.0
+  float sox_val = random(5, 30) / 10.0;      // e.g., 0.5 to 3.0
+  float pm25_val = random(100, 300) / 10.0;  // e.g., 10.0 to 30.0
+  float pm10_val = random(150, 400) / 10.0;  // e.g., 15.0 to 40.0
+  float noise_val = random(300, 800) / 10.0; // e.g., 30.0 to 80.0
+  int light_val = random(100, 1000);       // e.g., 100 to 1000
+
+  // 2. Create a JSON object
+  // This structure is flat and matches the TUI script
+  StaticJsonDocument<256> doc;
+
+  // These keys MUST match the IDs of the SensorWidget in tui_dashboard.py
+  doc["nox"] = nox_val;
+  doc["sox"] = sox_val;
+  doc["pm25"] = pm25_val;
+  doc["pm10"] = pm10_val;
+  doc["noise"] = noise_val;
+  doc["light"] = light_val;
+  
+  // 3. Serialize the JSON object into a string
+  char buffer[256];
+  size_t n = serializeJson(doc, buffer);
+
+  // 4. Publish the message
+  Serial.print("Publishing message: ");
+  Serial.println(buffer);
+  
+  if (client.publish(mqtt_topic, buffer, n)) {
+    Serial.println("Message published successfully");
+  } else {
+    Serial.println("Message publishing failed");
+  }
+}
+
+void setup() {
+  setup_wifi(); // Connect to the Wi-Fi hotspot
+  
+  // Point the MQTT client to the RPi's IP and port
+  client.setServer(mqtt_server_ip, mqtt_port);
+}
+
+void loop() {
+  // Check if we are connected to the MQTT broker
+  if (!client.connected()) {
+    reconnect_mqtt();
+  }
+  // This is the "heartbeat" of the MQTT client. It must be called regularly.
+  client.loop();
+
+  // This is a non-blocking timer
+  long now = millis();
+  if (now - lastMsgTime > msgInterval) {
+    lastMsgTime = now;
+    
+    // Time to send a new message!
+    publishSensorData();
+  }
+}
